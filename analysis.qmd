@@ -1,0 +1,99 @@
+---
+title: "Bitcoin daily prices"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(arrow)
+
+prices <- read_parquet("data/daily_prices.parquet")
+```
+
+```{r}
+prices |>
+  filter(coin_id == "btc") |>
+  ggplot(aes(x = as.Date(date_raw), y = price_usd)) +
+  geom_line() +
+  labs(
+    x = "Date",
+    y = "Price (USD)",
+    title = "Bitcoin daily price"
+  )
+```
+
+```{r}
+prices |>
+  inner_join(read_parquet("data/coin_metadata.parquet"), by = "coin_id") |>
+  inner_join(read_parquet("data/categories.parquet"), by = "category_id") |>
+  group_by(date_raw, category_name) |>
+  summarise(category_market_cap = sum(market_cap_usd, na.rm = TRUE), .groups = "drop") |>
+  group_by(date_raw) |>
+  mutate(category_share = category_market_cap / sum(category_market_cap)) |>
+  ungroup() -> category_shares
+
+category_order <- category_shares |>
+  group_by(category_name) |>
+  summarise(typical_share = median(category_share), .groups = "drop") |>
+  arrange(desc(typical_share)) |>
+  pull(category_name)
+
+event_windows <- tibble(
+  start = as.Date(c("2022-05-07", "2022-11-08")),
+  end = as.Date(c("2022-05-12", "2022-11-11")),
+  label = c("Luna/UST crash", "FTX collapse"),
+  label_date = as.Date(c("2022-05-09", "2022-11-09")),
+  label_y = c(0.98, 0.88)
+)
+
+category_shares |>
+  mutate(category_name = factor(category_name, levels = category_order)) |>
+  ggplot(aes(x = as.Date(date_raw), y = category_share, fill = category_name)) +
+  geom_area(position = "stack") +
+  geom_rect(
+    data = event_windows,
+    aes(xmin = start, xmax = end, ymin = 0, ymax = 1),
+    inherit.aes = FALSE,
+    fill = "grey20",
+    alpha = 0.18
+  ) +
+  geom_vline(
+    data = event_windows,
+    aes(xintercept = start),
+    inherit.aes = FALSE,
+    linetype = "dashed",
+    color = "grey20"
+  ) +
+  geom_label(
+    data = event_windows,
+    aes(x = label_date, y = label_y, label = label),
+    inherit.aes = FALSE,
+    size = 3,
+    label.size = 0,
+    fill = "white"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Bitcoin" = "#E69F00",
+      "DeFi" = "#009E73",
+      "Exchange Token" = "#0072B2",
+      "Meme Coin" = "#D55E00",
+      "Smart Contract Platform" = "#56B4E9",
+      "Stablecoin" = "#CC79A7"
+    ),
+    breaks = category_order
+  ) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  labs(
+    x = "Date",
+    y = "Share of summed market cap",
+    fill = "Category (ordered by median share)",
+    title = "Crypto market-cap share shifts across categories",
+    subtitle = "Daily shares of market cap across categorized coins in this dataset\n(each day totals 100%).",
+    caption = "Source: PPBDS misc.tutorials r4ds-7 daily prices and coin-category metadata."
+  ) +
+  theme(
+    plot.caption = element_text(hjust = 0),
+    plot.margin = margin(t = 12, r = 12, b = 12, l = 12)
+  )
+```
